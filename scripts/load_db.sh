@@ -1,6 +1,6 @@
 #!/bin/bash
 
-cd ~/build
+cd ../build
 
 # AR
 ./read_cold -f /mnt/db/dataset/amazon_reviews.txt -k 16 -v 64 -d /mnt/ssd/db_ar -m 7 -w > ../evaluation/ar_put.txt

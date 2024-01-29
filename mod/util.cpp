@@ -1,10 +1,11 @@
 //
 // Created by daiyi on 2020/02/02.
 //
-
+#include <iostream>
 #include <util/mutexlock.h>
 #include "util.h"
-#include "learned_index.h"
+// #include "learned_index.h"
+#include "leveldb/learned_index.h"
 #include <x86intrin.h>
 
 using std::to_string;
@@ -80,6 +81,12 @@ namespace adgMod {
 
 
     string generate_key(const string& key) {
+        // string result = key;
+        // if (key.length() < key_size){
+        //     result = string(key_size - key.length(), '0') + key;
+        // }
+        //std::cout << "[Debug]key: " << std::move(result) << std::endl;
+        
         string result = string(key_size - key.length(), '0') + key;
         return std::move(result);
     }

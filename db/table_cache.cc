@@ -12,7 +12,7 @@
 #include "mod/stats.h"
 #include "table/block.h"
 #include "db/version_set.h"
-
+#include <iostream>
 
 namespace leveldb {
 
@@ -163,13 +163,18 @@ Status TableCache::Get(const ReadOptions& options, uint64_t file_number,
                        adgMod::LearnedIndexData** model, bool* file_learned) {
   Cache::Handle* handle = nullptr;
   adgMod::Stats* instance = adgMod::Stats::GetInstance();
+  //std::cout << __func__ << " " << (void*)k.data() << std::endl;
 
   if ((adgMod::MOD == 6 || adgMod::MOD == 7)) {
+      //std::cout << "[Debug] table_cache.cc: GetModel" << std::endl;
       *model = adgMod::file_data->GetModel(meta->number);
       assert(file_learned != nullptr);
+      //std::cout << "[Debug] table_cache.cc: Learned" << std::endl;
       *file_learned = (*model)->Learned();
       if (learned || *file_learned) {
+          //std::cout << "[Debug] table_cache.cc: LevelRead" << std::endl;
           LevelRead(options, file_number, file_size, k, arg, handle_result, level, meta, lower, upper, learned, version);
+          //std::cout << "[Debug] table_cache.cc: LevelRead over" << std::endl;
           return Status::OK();
       }
   }
@@ -297,6 +302,7 @@ void TableCache::LevelRead(const ReadOptions &options, uint64_t file_number,
 #endif
     //Cache::Handle* cache_handle = FindFile(options, file_number, file_size);
     Cache::Handle* cache_handle = nullptr;
+    //std::cout << "[Debug] table_cache.cc: LevelRead: FindTable" << std::endl;
     Status s = FindTable(file_number, file_size, &cache_handle);
     TableAndFile* tf = reinterpret_cast<TableAndFile*>(cache_->Value(cache_handle));
     RandomAccessFile* file = tf->file;
@@ -312,7 +318,9 @@ void TableCache::LevelRead(const ReadOptions &options, uint64_t file_number,
 #endif
         ParsedInternalKey parsed_key;
         ParseInternalKey(k, &parsed_key);
+        //std::cout << "[Debug] table_cache.cc: LevelRead: GetModel" << std::endl;
         adgMod::LearnedIndexData* model = adgMod::file_data->GetModel(meta->number);
+        //std::cout << "[Debug] table_cache.cc: LevelRead: GetPosition" << std::endl;
         auto bounds = model->GetPosition(parsed_key.user_key);
         lower = bounds.first;
         upper = bounds.second;
@@ -333,6 +341,7 @@ void TableCache::LevelRead(const ReadOptions &options, uint64_t file_number,
     size_t index_upper = upper / adgMod::block_num_entries;
 
     uint64_t i = index_lower;
+    //std::cout << "[Debug] table_cache.cc: LevelRead: GetPosition" << std::endl;
     if (index_lower != index_upper) {
         Block* index_block = tf->table->rep_->index_block;
         uint32_t mid_index_entry = DecodeFixed32(index_block->data_ + index_block->restart_offset_ + index_lower * sizeof(uint32_t));
@@ -372,6 +381,7 @@ void TableCache::LevelRead(const ReadOptions &options, uint64_t file_number,
     size_t read_size = (pos_block_upper - pos_block_lower + 1) * adgMod::entry_size;
     static char scratch[4096];
     Slice entries;
+    
     s = file->Read(block_offset + pos_block_lower * adgMod::entry_size, read_size, &entries, scratch);
     assert(s.ok());
 
@@ -379,7 +389,7 @@ void TableCache::LevelRead(const ReadOptions &options, uint64_t file_number,
     bool first_search = true;
 #endif
 
-
+    //std::cout << "[Debug] table_cache.cc: LevelRead: Check " << std::endl;
     // Binary Search
     uint64_t left = pos_block_lower, right = pos_block_upper;
     while (left < right) {
@@ -407,10 +417,11 @@ void TableCache::LevelRead(const ReadOptions &options, uint64_t file_number,
     }
 
 
-
+    //std::cout << "[Debug] table_cache.cc: LevelRead: GetPosition" << std::endl;
     uint32_t shared, non_shared, value_length;
     const char* key_ptr = DecodeEntry(entries.data() + (left - pos_block_lower) * adgMod::entry_size,
             entries.data() + read_size, &shared, &non_shared, &value_length);
+    
     assert(key_ptr != nullptr && shared == 0 && "Entry Corruption");
 #ifdef INTERNAL_TIMER
     if (!first_search) {
@@ -419,11 +430,17 @@ void TableCache::LevelRead(const ReadOptions &options, uint64_t file_number,
         instance->PauseTimer(5);
     }
 #endif
+    
+
     Slice key(key_ptr, non_shared), value(key_ptr + non_shared, value_length);
+    //std::cout << " " << (void*)key_ptr << " " << non_shared << " " << (void*)key_ptr << " " << non_shared << " " << value_length << std::endl;
+    //std::cout << "[Debug] table_cache.cc: LevelRead: DecodeEntry: " << (void*)key.data() << std::endl;
     handle_result(arg, key, value);
 
     //cache handle;
+    //std::cout << "[Debug] table_cache.cc: LevelRead: Release" << std::endl;
     cache_->Release(cache_handle);
+    //std::cout << "[Debug] table_cache.cc: LevelRead: end" << std::endl;
 }
 
 

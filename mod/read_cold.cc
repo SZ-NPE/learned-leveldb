@@ -5,7 +5,8 @@
 #include "leveldb/comparator.h"
 #include "util.h"
 #include "stats.h"
-#include "learned_index.h"
+// #include "learned_index.h"
+#include "leveldb/learned_index.h"
 #include <cstring>
 #include "cxxopts.hpp"
 #include <unistd.h>
@@ -27,6 +28,7 @@ using std::string;
 
 int num_pairs_base = 1000;
 int mix_base = 20;
+int chunk_size = 100000;
 
 
 
@@ -83,6 +85,7 @@ enum LoadType {
 };
 
 int main(int argc, char *argv[]) {
+    cout << "Run begin" << endl;
     int num_operations, num_iteration, num_mix;
     float test_num_segments_base;
     float num_pair_step;
@@ -91,8 +94,10 @@ int main(int argc, char *argv[]) {
     bool change_level_load, change_file_load, change_level_learning, change_file_learning;
     int load_type, insert_bound, length_range;
     string db_location_copy;
-
+    
+    cout << "[Debug] run first" << endl;
     cxxopts::Options commandline_options("leveldb read test", "Testing leveldb read performance.");
+    cout << "[Debug] run second" << endl;
     commandline_options.add_options()
             ("n,get_number", "the number of gets (to be multiplied by 1024)", cxxopts::value<int>(num_operations)->default_value("1000"))
             ("s,step", "the step of the loop of the size of db", cxxopts::value<float>(num_pair_step)->default_value("1"))
@@ -131,7 +136,7 @@ int main(int argc, char *argv[]) {
         printf("%s", commandline_options.help().c_str());
         exit(0);
     }
-
+    //cout << "[Debug] run 1" << endl;
     std::default_random_engine e1(0), e2(255), e3(0);
     srand(0);
     num_operations *= num_pairs_base;
@@ -143,7 +148,7 @@ int main(int argc, char *argv[]) {
     adgMod::file_learning_enabled ^= change_file_learning;
     adgMod::load_level_model ^= change_level_load;
     adgMod::load_file_model ^= change_file_load;
-
+    //cout << "[Debug] run 2" << endl;
    // adgMod::file_learning_enabled = false;
 
 
@@ -155,8 +160,13 @@ int main(int argc, char *argv[]) {
         ifstream input(input_filename);
         string key;
         while (input >> key) {
-            string the_key = generate_key(key);
-            keys.push_back(std::move(the_key));
+            if(key.length() <= key_size ){
+                //string the_key = generate_key(key);
+                //keys.push_back(std::move(the_key));
+                keys.push_back(std::move(key));
+            }
+            // string the_key = generate_key(key);
+            // keys.push_back(std::move(the_key));
         }
         //adgMod::key_size = (int) keys.front().size();
     } else {
@@ -165,7 +175,6 @@ int main(int argc, char *argv[]) {
             keys.push_back(generate_key(to_string(udist_key(e2))));
         }
     }
-
     if (!distribution_filename.empty()) {
         use_distribution = true;
         ifstream input(distribution_filename);
@@ -224,6 +233,10 @@ int main(int argc, char *argv[]) {
         write_options.sync = false;
         instance->ResetAll();
 
+        // cout << "[Debug] keys.size(): " << keys.size() << endl;
+        // for (int i = 0; i < keys.size(); ++i){
+        //     cout << "[Debug] keys." << i << ": " << keys[i] << endl;
+        // }
 
         if (fresh_write && iteration == 0) {
             string command = "rm -rf " + db_location;
@@ -237,8 +250,10 @@ int main(int argc, char *argv[]) {
 
 
             instance->StartTimer(9);
-            int cut_size = keys.size() / 100000;
+            int cut_size = keys.size() / chunk_size;
+            if (cut_size == 0) cut_size = 1; 
             std::vector<std::pair<int, int>> chunks;
+            // cout << "[Debug]load_type: " << load_type << endl;
             switch (load_type) {
                 case Ordered: {
                     for (int cut = 0; cut < cut_size; ++cut) {
@@ -269,14 +284,10 @@ int main(int argc, char *argv[]) {
                 default: assert(false && "Unsupported load type.");
             }
 
+            // cout << "[Debug]begin put" << endl;
             for (int cut = 0; cut < chunks.size(); ++cut) {
                 for (int i = chunks[cut].first; i < chunks[cut].second; ++i) {
-
-
-                    //cout << keys[i] << endl;
-
                     status = db->Put(write_options, keys[i], {values.data() + uniform_dist_value(e2), (uint64_t) adgMod::value_size});
-
                     assert(status.ok() && "File Put Error");
                 }
             }
@@ -285,31 +296,43 @@ int main(int argc, char *argv[]) {
             cout << "Put Complete" << endl;
 
             keys.clear();
+            
+            //print_file_info
+            if (print_file_info && iteration == 0) db->PrintFileInfo(); 
 
-            if (print_file_info && iteration == 0) db->PrintFileInfo();
+            //WaitForBackground
             adgMod::db->WaitForBackground();
             delete db;
+
+            cout << "[Debug] Open db to learn" << endl;
             status = DB::Open(options, db_location, &db);
             adgMod::db->WaitForBackground();
+
+            //Use Mod
             if (adgMod::MOD == 6 || adgMod::MOD == 7) {
                 Version* current = adgMod::db->versions_->current();
-
                 for (int i = 1; i < config::kNumLevels; ++i) {
+                    cout << "[Debug]learn mod" << endl;
                     LearnedIndexData::Learn(new VersionAndSelf{current, adgMod::db->version_count, current->learned_index_data_[i].get(), i});
                 }
                 current->FileLearn();
             }
             cout << "Shutting down" << endl;
             adgMod::db->WaitForBackground();
-            delete db;
+            //delete db;
 
             //keys.reserve(100000000000 / adgMod::value_size);
             if (!input_filename.empty()) {
                 ifstream input(input_filename);
                 string key;
                 while (input >> key) {
-                    string the_key = generate_key(key);
-                    keys.push_back(std::move(the_key));
+                    if(key.length() <= key_size ){
+                        //string the_key = generate_key(key);
+                        //keys.push_back(std::move(the_key));
+                        keys.push_back(std::move(key));
+                    }
+                    // string the_key = generate_key(key);
+                    // keys.push_back(std::move(the_key));
                 }
                 adgMod::key_size = (int) keys.front().size();
             }
@@ -334,24 +357,26 @@ int main(int argc, char *argv[]) {
         if (evict) system("sync; echo 3 | sudo tee /proc/sys/vm/drop_caches");
 
         cout << "Starting up" << endl;
-        status = DB::Open(options, db_location, &db);
+        //status = DB::Open(options, db_location, &db);
+        cout << "[Debug] open db to find" << endl;
         adgMod::db->WaitForBackground();
+
         Iterator* db_iter = length_range == 0 ? nullptr : db->NewIterator(read_options);
         assert(status.ok() && "Open Error");
-//            for (int s = 12; s < 20; ++s) {
-//                instance->ResetTimer(s);
-//            }
+        //            for (int s = 12; s < 20; ++s) {
+        //                instance->ResetTimer(s);
+        //            }
 
-//        if (adgMod::MOD == 6 || adgMod::MOD == 7) {
-//            for (int i = 1; i < config::kNumLevels; ++i) {
-//                Version* current = adgMod::db->versions_->current();
-//                LearnedIndexData::Learn(new VersionAndSelf{current, adgMod::db->version_count, current->learned_index_data_[i].get(), i});
-//            }
-//        }
-//        cout << "Shutting down" << endl;
-//        adgMod::db->WaitForBackground();
-//        delete db;
-//        return 0;
+        //        if (adgMod::MOD == 6 || adgMod::MOD == 7) {
+        //            for (int i = 1; i < config::kNumLevels; ++i) {
+        //                Version* current = adgMod::db->versions_->current();
+        //                LearnedIndexData::Learn(new VersionAndSelf{current, adgMod::db->version_count, current->learned_index_data_[i].get(), i});
+        //            }
+        //        }
+        //        cout << "Shutting down" << endl;
+        //        adgMod::db->WaitForBackground();
+        //        delete db;
+        //        return 0;
 
         uint64_t last_read = 0, last_write = 0;
         int last_level = 0, last_file = 0, last_baseline = 0, last_succeeded = 0, last_false = 0, last_compaction = 0, last_learn = 0;
@@ -371,6 +396,7 @@ int main(int argc, char *argv[]) {
             length_range = use_ycsb && ycsb_is_write[i] > 2 ? ycsb_is_write[i] - 100 : length_range;
 
             if (write) {
+                cout << "Write begin" << endl;
                 if (input_filename.empty()) {
                     instance->StartTimer(10);
                     status = db->Put(write_options, generate_key(to_string(distribution[i])), {values.data() + uniform_dist_value(e3), (uint64_t) adgMod::value_size});
@@ -396,6 +422,7 @@ int main(int argc, char *argv[]) {
                     //cout << index << endl;
                 }
             } else if (length_range != 0) {
+                cout << "Seek begin" << endl;
                 // Seek
                 if (input_filename.empty()) {
                     instance->StartTimer(4);
@@ -410,6 +437,7 @@ int main(int argc, char *argv[]) {
                     instance->PauseTimer(4);
                 }
                 
+                cout << "Range begin" << endl;
                 // Range
                 instance->StartTimer(17);
                 for (int r = 0; r < length_range; ++r) {
@@ -422,12 +450,14 @@ int main(int argc, char *argv[]) {
                 }
                 instance->PauseTimer(17);
             } else {
+                //cout << "[Debug] find begin" << endl;
                 string value;
                 if (input_filename.empty()) {
                     instance->StartTimer(4);
                     status = db->Get(read_options, generate_key(to_string(distribution[i])), &value);
                     instance->PauseTimer(4);
                     if (!status.ok()) {
+                        // cout << "[Not Found 1] ";
                         cout << distribution[i] << " Not Found" << endl;
                         //assert(status.ok() && "File Get Error");
                     }
@@ -438,17 +468,23 @@ int main(int argc, char *argv[]) {
                     if (insert_bound != 0 && index > insert_bound) {
                         status = db->Get(read_options, generate_key(to_string(10000000000 + index)), &value);
                     } else {
+                        //cout << "[Debug] db->Get begin" << endl;
+                        //cout << "[Get] " << key  << endl;
                         status = db->Get(read_options, key, &value);
+                        
                     }
                     instance->PauseTimer(4);
 
-                    //cout << "Get " << key << " : " << value << endl;
+                    //cout << "[Get] " << key << " : " << value << endl;
                     if (!status.ok()) {
+                        // cout << "[Not Found 2] ";
                         cout << key << " Not Found" << endl;
                         //assert(status.ok() && "File Get Error");
                     }
                 }
             }
+
+            // cout << "[Debug] Over" << endl;
 
             if (pause) {
                 if ((i + 1) % (num_operations / 10000) == 0) ::usleep(800000);
@@ -557,3 +593,4 @@ int main(int argc, char *argv[]) {
         }
     }
 }
+

@@ -4,7 +4,8 @@
 #include <iostream>
 #include <string>
 #include <vector>
-
+using std::cout;
+using std::endl;
 
 // Code modified from https://github.com/RyanMarcus/plr
 
@@ -91,7 +92,7 @@ GreedyPLR::setup() {
 
 Segment
 GreedyPLR::current_segment() {
-    uint64_t segment_start = this->s0.x;
+    double segment_start = this->s0.x;
     double avg_slope = (this->rho_lower.a + this->rho_upper.a) / 2.0;
     double intercept = -avg_slope * this->sint.x + this->sint.y;
     Segment s = {segment_start, avg_slope, intercept, last_pt.x};
@@ -146,30 +147,29 @@ PLR::PLR(double gamma) {
 }
 
 std::vector<Segment>&
-PLR::train(std::vector<string>& keys, bool file) {
+PLR::train(std::vector<double>& keys, bool file) {
+//PLR::train(std::vector<string>& keys, bool file) {
     GreedyPLR plr(this->gamma);
     int count = 0;
     size_t size = keys.size();
     for (int i = 0; i < size; ++i) {
-        Segment seg = plr.process(point((double) stoull(keys[i]), i));
+        Segment seg = plr.process(point(keys[i], i));
+        //Segment seg = plr.process(point((double) stoull(keys[i]), i));
         if (seg.x != 0 ||
             seg.k != 0 ||
             seg.b != 0) {
             this->segments.push_back(seg);
         }
-
         if (!file && ++count % 10 == 0 && adgMod::env->compaction_awaiting.load() != 0) {
             segments.clear();
             return segments;
         }
     }
-
     Segment last = plr.finish();
     if (last.x != 0 ||
         last.k != 0 ||
         last.b != 0) {
         this->segments.push_back(last);
     }
-
     return this->segments;
 }

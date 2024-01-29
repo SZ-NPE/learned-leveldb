@@ -7,5 +7,6 @@
 cmake-*
 
 # Build directory.
-build/
-out/
+build/*
+out/*
+**/test

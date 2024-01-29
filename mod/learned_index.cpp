@@ -9,11 +9,48 @@
 #include <iostream>
 #include <fstream>
 #include "util/mutexlock.h"
-#include "learned_index.h"
+#include "leveldb/learned_index.h"
 #include "util.h"
 #include "db/version_set.h"
+// #include "../scode/str_int.h"
+#include <sstream>
 
 namespace adgMod {
+    vector<double> LearnedIndexData::toCode(){
+        
+        double pre_ba;
+        double based = 1;
+
+        vector<double> turn;
+        
+        for (int i = 0; i < string_keys.size(); i++){
+            reverse(string_keys[i].begin(),string_keys[i].end());
+            if (string_keys[i].length() > max_lenth) max_lenth = string_keys[i].length();
+        }
+        for (int i = 0; i < max_lenth; i++){
+            vector<char> compare;
+            for (int j = 0; j < string_keys.size(); j++) {
+                compare.push_back(string_keys[j][i]);
+            }
+            vector<char>::iterator max = max_element(compare.begin(), compare.end());
+            vector<char>::iterator min = min_element(compare.begin(), compare.end());
+            based_char.push_back(*min);
+
+            if (i != 0) based *= pre_ba;
+            pre_ba = *max-*min+1;
+            based_num.push_back(based);
+        }
+        for (int i = 0; i < string_keys.size(); i++){
+            double num = 0;
+            for (int j = 0; j < string_keys[i].length(); j++){
+                num += based_num[j] * (double)(string_keys[i][j] - based_char[j]);
+            }
+            
+            turn.push_back(num);
+        }
+        string_keys.clear();
+        return turn;
+    }
 
     std::pair<uint64_t, uint64_t> LearnedIndexData::GetPosition(const Slice& target_x) const {
         assert(string_segments.size() > 1);
@@ -60,21 +97,28 @@ namespace adgMod {
 
         if (string_keys.empty()) assert(false);
 
-
-        uint64_t temp = atoll(string_keys.back().c_str());
-        min_key = atoll(string_keys.front().c_str());
-        max_key = atoll(string_keys.back().c_str());
+        vector<double> double_key = toCode();
+        // for (int i = 0; i < double_key.size(); i++) {
+        //     cout << i << ": " << string_keys[i] << "->" << double_key[i] << endl;
+        // }
+        // uint64_t temp = atoll(string_keys.back().c_str());
+        // min_key = atoll(string_keys.front().c_str());
+        // max_key = atoll(string_keys.back().c_str());
+        double temp = double_key.back();
+        min_key = double_key.front();
+        max_key = double_key.back();
         size = string_keys.size();
 
+        //std::vector<Segment> segs = plr.train(string_keys, !is_level);
+        std::vector<Segment> segs = plr.train(double_key, !is_level);
 
-        std::vector<Segment> segs = plr.train(string_keys, !is_level);
         if (segs.empty()) return false;
         segs.push_back((Segment) {temp, 0, 0, 0});
         string_segments = std::move(segs);
 
-        for (auto& str: string_segments) {
-            //printf("%s %f\n", str.first.c_str(), str.second);
-        }
+        // for (auto& str: string_segments) {
+        //     //printf("%s %f\n", str.first.c_str(), str.second);
+        // }
 
         learned.store(true);
         //string_keys.clear();
@@ -122,6 +166,47 @@ namespace adgMod {
         delete vas;
     }
 
+    void LearnedIndexData::NewFileLearn() {
+        // FILL IN GAMMA (error)
+        PLR plr = PLR(error);
+
+        if (string_keys.empty()) assert(false);
+        
+        std::vector<double> double_key = this->toCode();
+
+        double temp = double_key.back();
+        //min_key = double_key.front();
+        //max_key = double_key.back();
+        size = string_keys.size();
+
+        //std::vector<Segment> segs = plr.train(string_keys, !is_level);
+        std::vector<Segment> segs = plr.train(double_key, true);
+
+        if (segs.empty()) return;
+        segs.push_back((Segment) {temp, 0, 0, 0});
+        string_segments = std::move(segs);
+
+        // for (auto& str: string_segments) {
+        //     //printf("%s %f\n", str.first.c_str(), str.second);
+        // }
+
+        // learned.store(true);
+        //string_keys.clear(); 
+        std::stringstream stream;
+        stream << adgMod::block_num_entries << " " << adgMod::block_size << " " << adgMod::entry_size << "\n";
+        for (Segment& item: string_segments) {
+            stream << item.x << " " << item.k << " " << item.b << " " << item.x2 << "\n";
+        }
+        for (char item: based_char){
+            stream << item << " ";
+        }
+        stream << "\n";
+        for (double item: based_num){
+            stream << item << " ";
+        } 
+         stream << "\n";
+        stream >> param;
+    }
     uint64_t LearnedIndexData::FileLearn(void *arg) {
         Stats* instance = Stats::GetInstance();
         bool entered = false;
@@ -173,17 +258,26 @@ namespace adgMod {
     }
 
     bool LearnedIndexData::Learned(Version* version, int v_count, int level) {
-        if (learned_not_atomic) return true;
-        else if (learned.load()) {
+        //std::cout << "[Debug] learned_index.cc: Learned begin" << std::endl;
+        if (learned_not_atomic) {
+            //std::cout << "[Debug] learned_index.cc: learned_not_atomic" << std::endl;
+            return true;
+        }
+        else{
+            //std::cout << "[Debug] learned_index.cc: Learned load begin" << std::endl;
+            if (learned.load()) {
+            //std::cout << "[Debug] learned_index.cc: Learned load" << std::endl;
             learned_not_atomic = true;
             return true;
-        } return false;
-//        } else {
-//            if (level_learning_enabled && ++current_seek >= allowed_seek && !learning.exchange(true)) {
-//                env->ScheduleLearning(&LearnedIndexData::Learn, new VersionAndSelf{version, v_count, this, level}, 0);
-//            }
-//            return false;
-//        }
+            }
+        }
+        return false;
+        //        } else {
+        //            if (level_learning_enabled && ++current_seek >= allowed_seek && !learning.exchange(true)) {
+        //                env->ScheduleLearning(&LearnedIndexData::Learn, new VersionAndSelf{version, v_count, this, level}, 0);
+        //            }
+        //            return false;
+        //        }
     }
 
     bool LearnedIndexData::Learned(Version* version, int v_count, FileMetaData *meta, int level) {
@@ -226,19 +320,22 @@ namespace adgMod {
     }
 
     void LearnedIndexData::ReadModel(const string &filename) {
+        //std::cout << "[Debug]learned_index.cc: ReadModel" <<  std::endl;
         std::ifstream input_file(filename);
-
         if (!input_file.good()) return;
         input_file >> adgMod::block_num_entries >> adgMod::block_size >> adgMod::entry_size;
+        int num = 0;
+        //cout << "[Debug] string_segments_max_size: " << string_segments.max_size() << endl; 
         while (true) {
             string x;
             double k, b;
-            uint64_t x2;
+            double x2;
             input_file >> x;
             if (x == "StartAcc") break;
             input_file >> k >> b >> x2;
             string_segments.emplace_back(atoll(x.c_str()), k, b, x2);
         }
+        //std::cout << "[Debug]learned_index.cc: ReadModel2" <<  std::endl;
         input_file >> min_key >> max_key >> size >> level >> cost;
         while (true) {
             uint64_t first;
@@ -246,7 +343,6 @@ namespace adgMod {
             if (!(input_file >> first >> second)) break;
             num_entries_accumulated.Add(first, std::move(second));
         }
-
         learned.store(true);
     }
 
