@@ -19,11 +19,11 @@ struct line {
 
 class Segment {
 public:
-    Segment(uint64_t _x, double _k, double _b, uint64_t _x2) : x(_x), k(_k), b(_b), x2(_x2) {}
-    uint64_t x;
+    Segment(double _x, double _k, double _b, double _x2) : x(_x), k(_k), b(_b), x2(_x2) {}
+    double x;
     double k;
     double b;
-    uint64_t x2;
+    double x2;
 };
 
 double get_slope(struct point p1, struct point p2);
@@ -65,7 +65,8 @@ private:
 
 public:
     PLR(double gamma);
-    std::vector<Segment>& train(std::vector<std::string>& keys, bool file);
+    std::vector<Segment>& train(std::vector<double>& keys, bool file);
+    //std::vector<Segment>& train(std::vector<std::string>& keys, bool file);
 //    std::vector<double> predict(std::vector<double> xx);
 //    double mae(std::vector<double> y_true, std::vector<double> y_pred);
 };

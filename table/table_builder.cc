@@ -5,7 +5,8 @@
 #include "leveldb/table_builder.h"
 
 #include <assert.h>
-
+#include "../mod/util.h"
+// #include "../mod/learned_index.h"
 #include "leveldb/comparator.h"
 #include "leveldb/env.h"
 #include "leveldb/filter_policy.h"
@@ -16,6 +17,7 @@
 #include "util/coding.h"
 #include "util/crc32c.h"
 
+using namespace adgMod;
 namespace leveldb {
 
 struct TableBuilder::Rep {
@@ -67,12 +69,14 @@ TableBuilder::TableBuilder(const Options& options, WritableFile* file)
   if (rep_->filter_block != nullptr) {
     rep_->filter_block->StartBlock(0);
   }
+  // LearnedMod = new adgMod::LearnedIndexData(file_allowed_seek);
 }
 
 TableBuilder::~TableBuilder() {
   assert(rep_->closed);  // Catch errors where caller forgot to call Finish()
   delete rep_->filter_block;
   delete rep_;
+  // delete LearnedMod;
 }
 
 Status TableBuilder::ChangeOptions(const Options& options) {
@@ -95,9 +99,22 @@ void TableBuilder::Add(const Slice& key, const Slice& value) {
   Rep* r = rep_;
   assert(!r->closed);
   if (!ok()) return;
+  // LearnedMod->string_keys.push_back(key.data());
   if (r->num_entries > 0) {
     assert(r->options.comparator->Compare(key, Slice(r->last_key)) > 0);
   }
+
+  //Google 
+  // if (adgMod::MOD == 6 || adgMod::MOD == 7) {
+  //   std::string handle_encoding;  
+  //   r->index_block.Add(r->last_key, Slice(handle_encoding));
+  //   r->filter_block->AddKey(r->last_key);
+  //   assert(r->data_block.empty());
+
+  //   r->pending_handle.EncodeTo(&handle_encoding);
+  //   LearnedIndexData::Learn(new VersionAndSelf{});
+  //   //LearnedIndexData::Learn(new VersionAndSelf{current, adgMod::db->version_count, current->learned_index_data_[i].get(), i});
+  // }
 
   if (r->pending_index_entry) {
     assert(r->data_block.empty());
@@ -137,6 +154,42 @@ void TableBuilder::Flush() {
     r->filter_block->StartBlock(r->offset);
   }
 }
+
+// void TableBuilder::WriteLearnBlock(BlockHandle* handle) {
+//   // File format contains a sequence of blocks where each block has:
+//   //    block_data: uint8[n]
+//   //    type: uint8
+//   //    crc: uint32
+//   assert(ok());
+//   Rep* r = rep_;
+//   Slice raw = LearnedMod->param;
+
+//   Slice block_contents;
+//   CompressionType type = r->options.compression;
+//   // TODO(postrelease): Support more compression options: zlib?
+//   switch (type) {
+//     case kNoCompression:
+//       block_contents = raw;
+//       break;
+
+//     case kSnappyCompression: {
+//       std::string* compressed = &r->compressed_output;
+//       if (port::Snappy_Compress(raw.data(), raw.size(), compressed) &&
+//           compressed->size() < raw.size() - (raw.size() / 8u)) {
+//         block_contents = *compressed;
+//       } else {
+//         // Snappy not supported, or compressed less than 12.5%, so just
+//         // store uncompressed form
+//         block_contents = raw;
+//         type = kNoCompression;
+//       }
+//       break;
+//     }
+//   }
+//   WriteRawBlock(block_contents, type, handle);
+//   r->compressed_output.clear();
+//   // block->Reset();
+// }
 
 void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle) {
   // File format contains a sequence of blocks where each block has:
@@ -225,7 +278,13 @@ Status TableBuilder::Finish() {
     WriteBlock(&meta_index_block, &metaindex_block_handle);
   }
 
+  
+
   // Write index block
+  // if (ok()) {
+  //   LearnedMod->NewFileLearn();
+  //   WriteLearnBlock(&index_block_handle);
+  // }
   if (ok()) {
     if (r->pending_index_entry) {
       //r->options.comparator->FindShortSuccessor(&r->last_key);

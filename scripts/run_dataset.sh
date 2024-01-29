@@ -1,6 +1,6 @@
 #!/bin/bash
 
-cd ~/build
+cd ../build
 
 # Datasets (file)
 for dist in linear segmented1p segmented10p normal; do

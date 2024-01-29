@@ -18,7 +18,7 @@
 #include <map>
 #include <set>
 #include <vector>
-
+#include <memory>
 #include "db/dbformat.h"
 #include "db/version_edit.h"
 #include "port/port.h"
