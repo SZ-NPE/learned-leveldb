@@ -544,26 +544,26 @@ class PosixEnv : public Env {
 
 
 
+  // test use only
+  void NewRandomAccessFileLearned(const std::string& filename, RandomAccessFile** result) {
+    int fd = ::open(filename.c_str(), O_RDONLY);
+    //*result = new PosixRandomAccessFile(filename, fd, &fd_limiter_);
 
-    void NewRandomAccessFileLearned(const std::string& filename, RandomAccessFile** result) {
-        int fd = ::open(filename.c_str(), O_RDONLY);
-        //*result = new PosixRandomAccessFile(filename, fd, &fd_limiter_);
-
-        uint64_t file_size;
-        Status status = GetFileSize(filename, &file_size);
-        if (status.ok()) {
-            void* mmap_base =
-                    ::mmap(/*addr=*/nullptr, file_size, PROT_READ, MAP_SHARED, fd, 0);
-            if (mmap_base != MAP_FAILED) {
-                *result = new PosixMmapReadableFile(filename,
-                                                    reinterpret_cast<char*>(mmap_base),
-                                                    file_size, &mmap_limiter_);
-            } else {
-                status = PosixError(filename, errno);
-            }
+    uint64_t file_size;
+    Status status = GetFileSize(filename, &file_size);
+    if (status.ok()) {
+        void* mmap_base =
+                ::mmap(/*addr=*/nullptr, file_size, PROT_READ, MAP_SHARED, fd, 0);
+        if (mmap_base != MAP_FAILED) {
+            *result = new PosixMmapReadableFile(filename,
+                                                reinterpret_cast<char*>(mmap_base),
+                                                file_size, &mmap_limiter_);
+        } else {
+            status = PosixError(filename, errno);
         }
-        ::close(fd);
     }
+    ::close(fd);
+  }
 
 
 
@@ -782,53 +782,61 @@ class PosixEnv : public Env {
     background_learn_queue_.emplace(background_work_function, background_work_arg, priority);
   }
 
+  // examine items in the learning_prepare queue to decide which ones to learn
   void PrepareLearn() {
     adgMod::Stats* instance = adgMod::Stats::GetInstance();
     std::priority_queue<std::pair<double, LearnParam>> learn_pq;
     bool wait_for_time = false;
     int64_t time_diff = 1000000;
     prepare_queue_mutex.Lock();
+
+    // dead loop
     while (true) {
+      while (learning_prepare.empty()) {
+        preparing_queue_cv.Wait();
+      }
 
-        while (learning_prepare.empty()) {
-            preparing_queue_cv.Wait();
+      uint32_t dummy;
+      uint64_t time_start = (__rdtscp(&dummy) - instance->initial_time) / adgMod::reference_frequency;// - adgMod::learn_trigger_time * 1000;
+
+      while (!learning_prepare.empty()) {
+        auto front = learning_prepare.front();
+        int level = front.second.first;
+
+        // if the file has been created for longer than wait_time (learn_trigger_time),
+        // we can do CBA analysis. else, wait until the file has lived wait_time
+        time_diff = front.first + adgMod::learn_trigger_time - time_start;
+        if (time_diff > 0) {
+          wait_for_time = true;
+          break;
         }
 
-        uint32_t dummy;
-        uint64_t time_start = (__rdtscp(&dummy) - instance->initial_time) / adgMod::reference_frequency;// - adgMod::learn_trigger_time * 1000;
+        learning_prepare.pop();
+        double score = adgMod::learn_cb_model->CalculateCB(level, front.second.second->file_size);
+        if (score > CBModel_Learn::const_size_to_cost) learn_pq.push(std::make_pair(score, front));
+      }
 
-        while (!learning_prepare.empty()) {
-            auto front = learning_prepare.front();
-            int level = front.second.first;
-            uint64_t wait_time = 100;
-            time_diff = front.first + adgMod::learn_trigger_time * wait_time - time_start;
-            if (time_diff > 0) {
-                wait_for_time = true;
-                break;
-            }
+      // items in learn_pq is ranked by its CBA score, larger meaning that
+      // CBA predicts the learning benefit to be larger
+      // Learn the file with the largest score first
+      while (!learn_pq.empty()) {
+        auto& top = learn_pq.top().second;
+        int level = top.second.first;
+        FileMetaData* meta = top.second.second;
+        adgMod::LearnedIndexData* model = adgMod::file_data->GetModel(meta->number);
+        prepare_queue_mutex.Unlock();
+        adgMod::LearnedIndexData::FileLearn(new adgMod::MetaAndSelf{nullptr, 0, meta, model, level});
+        prepare_queue_mutex.Lock();
+        learn_pq.pop();
+      }
 
-            learning_prepare.pop();
-            double score = adgMod::learn_cb_model->CalculateCB(level, front.second.second->file_size);
-            if (score > CBModel_Learn::const_size_to_cost) learn_pq.push(std::make_pair(score, front));
-        }
-
-        while (!learn_pq.empty()) {
-            auto& top = learn_pq.top().second;
-            int level = top.second.first;
-            FileMetaData* meta = top.second.second;
-            adgMod::LearnedIndexData* model = adgMod::file_data->GetModel(meta->number);
-            prepare_queue_mutex.Unlock();
-            adgMod::LearnedIndexData::FileLearn(new adgMod::MetaAndSelf{nullptr, 0, meta, model, level});
-            prepare_queue_mutex.Lock();
-            learn_pq.pop();
-        }
-
-        if (wait_for_time) {
-            prepare_queue_mutex.Unlock();
-            SleepForMicroseconds((int) (time_diff / 1000));
-            prepare_queue_mutex.Lock();
-            wait_for_time = false;
-        }
+      // if we decide to wait, sleep here
+      if (wait_for_time) {
+        prepare_queue_mutex.Unlock();
+        SleepForMicroseconds((int) (time_diff / 1000));
+        prepare_queue_mutex.Lock();
+        wait_for_time = false;
+      }
     }
   }
 
@@ -837,7 +845,7 @@ class PosixEnv : public Env {
   }
 
   void PrepareLearning(uint64_t time_start, int level, FileMetaData* meta) {
-    if (adgMod::fresh_write || (adgMod::MOD != 6 && adgMod::MOD != 7)) return;
+    if (adgMod::fresh_write || (adgMod::MOD != 6 && adgMod::MOD != 7 && adgMod::MOD != 9)) return;
     MutexLock guard(&prepare_queue_mutex);
     if (!preparing_thread_started) {
         preparing_thread_started = true;
@@ -889,13 +897,19 @@ class PosixEnv : public Env {
   std::queue<BackgroundWorkItem> background_work_queue_
       GUARDED_BY(background_work_mutex_);
 
+  // issue background learning with the same mechanism as background compaction
   port::Mutex background_learn_mutex_;
   port::CondVar background_learn_cv_ GUARDED_BY(background_learn_mutex_);
   bool started_learn_thread_ GUARDED_BY(background_learn_mutex_);
   std::priority_queue<BackgroundWorkItem> background_learn_queue_ GUARDED_BY(background_learn_mutex_);
 
-    typedef std::pair<uint64_t, std::pair<int, FileMetaData*>> LearnParam;
-
+  // a simple supplier-consumer model to store new files that we may want to learn
+  // learning_prepare is filled by the background compaction thread
+  // when new file is generated. It is consumed by a learning prepare thread
+  // that examins the items to decide if an actual learning should be issued.
+  // (Learning is done by another background learning thread, so we have 4 threads in total
+  // taking the foreground main thread into account.)
+  typedef std::pair<uint64_t, std::pair<int, FileMetaData*>> LearnParam;
   port::Mutex prepare_queue_mutex;
   std::queue<LearnParam> learning_prepare;
   bool preparing_thread_started;

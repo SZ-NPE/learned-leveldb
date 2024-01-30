@@ -78,8 +78,9 @@ void PutAndPrefetch(int lower, int higher, vector<string>& keys, int largest) {
     //cout << "Prefetch Complete" << endl;
 };
 
-
+// this application is deprecated, don't use.
 int main(int argc, char *argv[]) {
+    int rc;
     int num_gets, num_iteration;
     float test_num_segments_base;
     float num_pair_lower, num_pair_upper, num_pair_step;
@@ -103,7 +104,7 @@ int main(int argc, char *argv[]) {
             ("file_info", "print the file structure info", cxxopts::value<bool>(print_file_info)->default_value("false"))
             ("test_num_segments", "test: number of segments per level", cxxopts::value<float>(test_num_segments_base)->default_value("1"))
             ("string_mode", "test: use string or int in model", cxxopts::value<bool>(adgMod::string_mode)->default_value("false"))
-            ("e,model_error", "error in modesl", cxxopts::value<uint32_t>(adgMod::model_error)->default_value("8"))
+            ("e,model_error", "error in modesl", cxxopts::value<uint32_t>(adgMod::file_model_error)->default_value("8"))
             ("f,input_file", "the filename of input file", cxxopts::value<string>(input_filename)->default_value(""))
             ("multiple", "test: use larger keys", cxxopts::value<uint64_t>(adgMod::key_multiple)->default_value("1"));
     auto result = commandline_options.parse(argc, argv);
@@ -138,7 +139,7 @@ int main(int argc, char *argv[]) {
         adgMod::test_num_level_segments =  (uint32_t) floor(num_pairs[outer] *  test_num_segments_base);
         for (size_t iteration = 0; iteration < num_iteration; ++iteration) {
             string command = "rm -rf " + db_location;
-            system(command.c_str());
+            rc = system(command.c_str());
 
             std::uniform_int_distribution<uint64_t > uniform_dist_file(0, (uint64_t) keys.size() - 1);
 

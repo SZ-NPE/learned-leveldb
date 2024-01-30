@@ -1,3 +1,4 @@
+#include <cmath>
 #include <string>
 #include <vector>
 #include <deque>
@@ -15,15 +16,21 @@ struct point {
 struct line {
     double a;
     double b;
+
+    bool LineCheck() {
+        if (!std::isnan(a) && !std::isnan(b)) {
+            return true;
+        }
+        return false;
+    }
 };
 
 class Segment {
 public:
-    Segment(uint64_t _x, double _k, double _b, uint64_t _x2) : x(_x), k(_k), b(_b), x2(_x2) {}
+    Segment(uint64_t _x, double _k, double _b) : x(_x), k(_k), b(_b) {}
     uint64_t x;
     double k;
     double b;
-    uint64_t x2;
 };
 
 double get_slope(struct point p1, struct point p2);
@@ -48,13 +55,13 @@ private:
     struct line rho_upper;
     struct point sint;
 
-    void setup();
+    bool setup();
     Segment current_segment();
-    Segment process__(struct point pt);
+    Segment process__(struct point pt, bool file);
 
 public:
     GreedyPLR(double gamma);
-    Segment process(const struct point& pt);
+    Segment process(const struct point& pt, bool file);
     Segment finish();
 };
 

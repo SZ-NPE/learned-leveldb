@@ -288,15 +288,17 @@ void DBImpl::DeleteObsoleteFiles() {
         if (type == kTableFile) {
           table_cache_->Evict(number);
           if (!adgMod::fresh_write) {
-              adgMod::file_stats_mutex.Lock();
-              auto iter = adgMod::file_stats.find(number);
-              //assert(iter != adgMod::file_stats.end());
-              adgMod::FileStats& file_stat = iter->second;
-              file_stat.Finish();
-              if (file_stat.end - file_stat.start >= 100 * adgMod::learn_trigger_time) {
-                  adgMod::learn_cb_model->AddFileData(file_stat.level, file_stat.num_lookup_neg, file_stat.num_lookup_pos, file_stat.size);
-              }
-              adgMod::file_stats_mutex.Unlock();
+            // when a file is deleted due to compaction, its stats during the lifetime
+            // is recorded by CBA
+            adgMod::file_stats_mutex.Lock();
+            auto iter = adgMod::file_stats.find(number);
+            //assert(iter != adgMod::file_stats.end());
+            adgMod::FileStats& file_stat = iter->second;
+            file_stat.Finish();
+            if (file_stat.end - file_stat.start >= adgMod::learn_trigger_time) {
+              adgMod::learn_cb_model->AddFileData(file_stat.level, file_stat.num_lookup_neg, file_stat.num_lookup_pos, file_stat.size);
+            }
+            adgMod::file_stats_mutex.Unlock();
           }
 
 //          adgMod::LearnedIndexData* model = adgMod::file_data->GetModel(number);
@@ -557,11 +559,12 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
     edit->AddFile(level, meta.number, meta.file_size, meta.smallest,
                   meta.largest);
 
+    // record stats for newly generated file
     if (!adgMod::fresh_write) {
-        adgMod::file_stats_mutex.Lock();
-        assert(adgMod::file_stats.find(meta.number) == adgMod::file_stats.end());
-        adgMod::file_stats.insert({meta.number, adgMod::FileStats(level, meta.file_size)});
-        adgMod::file_stats_mutex.Unlock();
+      adgMod::file_stats_mutex.Lock();
+      assert(adgMod::file_stats.find(meta.number) == adgMod::file_stats.end());
+      adgMod::file_stats.insert({meta.number, adgMod::FileStats(level, meta.file_size)});
+      adgMod::file_stats_mutex.Unlock();
     }
 
 
@@ -841,9 +844,13 @@ void DBImpl::BackgroundCompaction() {
     DeleteObsoleteFiles();
   }
 
-
-
-
+  if (c != nullptr && adgMod::MOD == 9 && !adgMod::fresh_write) {
+      //TODO: enqueue updated levels
+      Version* current = versions_->current();
+      int level = c->level();
+      adgMod::LearnedIndexData::LevelLearn(new adgMod::VersionAndSelf{current, version_count, current->learned_index_data_[level].get(), level}, true);
+      adgMod::LearnedIndexData::LevelLearn(new adgMod::VersionAndSelf{current, version_count, current->learned_index_data_[level+1].get(), level+1}, true);
+  }
 
     if (c != nullptr) {
         std::set<int> changed_level;
@@ -984,12 +991,13 @@ Status DBImpl::FinishCompactionOutputFile(CompactionState* compact,
   int level = compact->compaction->level() + 1;
   CompactionState::Output* output = compact->current_output();
 
-    if (!adgMod::fresh_write) {
-        adgMod::file_stats_mutex.Lock();
-        assert(adgMod::file_stats.find(output_number) == adgMod::file_stats.end());
-        adgMod::file_stats.insert({output_number, adgMod::FileStats(compact->compaction->level() + 1, current_bytes)});
-        adgMod::file_stats_mutex.Unlock();
-    }
+  // record file stats for newly generated files
+  if (!adgMod::fresh_write) {
+    adgMod::file_stats_mutex.Lock();
+    assert(adgMod::file_stats.find(output_number) == adgMod::file_stats.end());
+    adgMod::file_stats.insert({output_number, adgMod::FileStats(compact->compaction->level() + 1, current_bytes)});
+    adgMod::file_stats_mutex.Unlock();
+  }
 
 
   uint32_t dummy;
@@ -999,6 +1007,8 @@ Status DBImpl::FinishCompactionOutputFile(CompactionState* compact,
   meta->file_size = output->file_size;
   meta->smallest = output->smallest;
   meta->largest = output->largest;
+
+  // When a new file is generated, it's put into learning_prepare queue.
   env_->PrepareLearning((__rdtscp(&dummy) - instance->initial_time) / adgMod::reference_frequency, level, meta);
 
   if (s.ok() && current_entries > 0) {
@@ -1303,36 +1313,37 @@ Status DBImpl::Get(const ReadOptions& options, const Slice& key,
 #endif
     if (mem->Get(lkey, value, &s)) {
 #ifdef INTERNAL_TIMER
-        instance->PauseTimer(14);
+      instance->PauseTimer(14);
 #endif
 #ifdef RECORD_LEVEL_INFO
-        adgMod::levelled_counters[3].Increment(7);
+      adgMod::levelled_counters[3].Increment(7);
 #endif
         // Done
     } else if (imm != nullptr && imm->Get(lkey, value, &s)) {
 #ifdef INTERNAL_TIMER
-        instance->PauseTimer(14);
+      instance->PauseTimer(14);
 #endif
 #ifdef RECORD_LEVEL_INFO
-        adgMod::levelled_counters[3].Increment(7);
+      adgMod::levelled_counters[3].Increment(7);
 #endif
         // Done
     } else {
 #ifdef INTERNAL_TIMER
-        instance->PauseTimer(14);
+      instance->PauseTimer(14);
 #endif
-        s = current->Get(options, lkey, value, &stats);
+      s = current->Get(options, lkey, value, &stats);
     }
 
+    // if Wisckey based implementation, need to read the value log to get the actual value
     if (adgMod::MOD >= 7 && s.ok()) {
 #ifdef INTERNAL_TIMER
-        instance->StartTimer(12);
+      instance->StartTimer(12);
 #endif
-        uint64_t value_address = DecodeFixed64(value->c_str());
-        uint32_t value_size = DecodeFixed32(value->c_str() + sizeof(uint64_t));
-        *value = std::move(vlog->ReadRecord(value_address, value_size));
+      uint64_t value_address = DecodeFixed64(value->c_str());
+      uint32_t value_size = DecodeFixed32(value->c_str() + sizeof(uint64_t));
+      *value = std::move(vlog->ReadRecord(value_address, value_size));
 #ifdef INTERNAL_TIMER
-        instance->PauseTimer(12);
+      instance->PauseTimer(12);
 #endif
     }
     mutex_.Lock();

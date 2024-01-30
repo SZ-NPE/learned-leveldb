@@ -23,6 +23,7 @@ using std::to_string;
 using std::vector;
 using std::map;
 using std::ifstream;
+using std::ofstream;
 using std::string;
 
 int num_pairs_base = 1000;
@@ -83,30 +84,34 @@ enum LoadType {
 };
 
 int main(int argc, char *argv[]) {
+    int rc;
     int num_operations, num_iteration, num_mix;
     float test_num_segments_base;
     float num_pair_step;
     string db_location, profiler_out, input_filename, distribution_filename, ycsb_filename;
     bool print_single_timing, print_file_info, evict, unlimit_fd, use_distribution = false, pause, use_ycsb = false;
     bool change_level_load, change_file_load, change_level_learning, change_file_learning;
-    int load_type, insert_bound, length_range;
+    int load_type, insert_bound;
     string db_location_copy;
+
+    string output;
 
     cxxopts::Options commandline_options("leveldb read test", "Testing leveldb read performance.");
     commandline_options.add_options()
             ("n,get_number", "the number of gets (to be multiplied by 1024)", cxxopts::value<int>(num_operations)->default_value("1000"))
             ("s,step", "the step of the loop of the size of db", cxxopts::value<float>(num_pair_step)->default_value("1"))
             ("i,iteration", "the number of iterations of a same size", cxxopts::value<int>(num_iteration)->default_value("1"))
-            ("m,modification", "if set, run our modified version", cxxopts::value<int>(adgMod::MOD)->default_value("0"))
+            ("m,modification", "if set, run our modified version, 7 fjle-model bourbon, 8 wiskey, 9 ours", cxxopts::value<int>(adgMod::MOD)->default_value("0"))
             ("h,help", "print help message", cxxopts::value<bool>()->default_value("false"))
             ("d,directory", "the directory of db", cxxopts::value<string>(db_location)->default_value("/mnt/ssd/testdb"))
-            ("k,key_size", "the size of key", cxxopts::value<int>(adgMod::key_size)->default_value("8"))
+            ("k,key_size", "the size of key", cxxopts::value<int>(adgMod::key_size)->default_value("16"))
             ("v,value_size", "the size of value", cxxopts::value<int>(adgMod::value_size)->default_value("8"))
             ("single_timing", "print the time of every single get", cxxopts::value<bool>(print_single_timing)->default_value("false"))
             ("file_info", "print the file structure info", cxxopts::value<bool>(print_file_info)->default_value("false"))
             ("test_num_segments", "test: number of segments per level", cxxopts::value<float>(test_num_segments_base)->default_value("1"))
             ("string_mode", "test: use string or int in model", cxxopts::value<bool>(adgMod::string_mode)->default_value("false"))
-            ("e,model_error", "error in modesl", cxxopts::value<uint32_t>(adgMod::model_error)->default_value("8"))
+            ("file_model_error", "error in file model", cxxopts::value<uint32_t>(adgMod::file_model_error)->default_value("8"))
+            ("level_model_error", "error in level model", cxxopts::value<uint32_t>(adgMod::level_model_error)->default_value("1"))
             ("f,input_file", "the filename of input file", cxxopts::value<string>(input_filename)->default_value(""))
             ("multiple", "test: use larger keys", cxxopts::value<uint64_t>(adgMod::key_multiple)->default_value("1"))
             ("w,write", "writedb", cxxopts::value<bool>(fresh_write)->default_value("false"))
@@ -115,17 +120,15 @@ int main(int argc, char *argv[]) {
             ("x,dummy", "dummy option")
             ("l,load_type", "load type", cxxopts::value<int>(load_type)->default_value("0"))
             ("filter", "use filter", cxxopts::value<bool>(adgMod::use_filter)->default_value("false"))
-            ("mix", "mix read and write", cxxopts::value<int>(num_mix)->default_value("0"))
+            ("mix", "portion of writes in workload in 1000 operations", cxxopts::value<int>(num_mix)->default_value("0"))
             ("distribution", "operation distribution", cxxopts::value<string>(distribution_filename)->default_value(""))
             ("change_level_load", "load level model", cxxopts::value<bool>(change_level_load)->default_value("false"))
             ("change_file_load", "enable level learning", cxxopts::value<bool>(change_file_load)->default_value("false"))
-            ("change_level_learning", "load file model", cxxopts::value<bool>(change_level_learning)->default_value("false"))
-            ("change_file_learning", "enable file learning", cxxopts::value<bool>(change_file_learning)->default_value("false"))
             ("p,pause", "pause between operation", cxxopts::value<bool>(pause)->default_value("false"))
             ("policy", "learn policy", cxxopts::value<int>(adgMod::policy)->default_value("0"))
             ("YCSB", "use YCSB trace", cxxopts::value<string>(ycsb_filename)->default_value(""))
             ("insert", "insert new value", cxxopts::value<int>(insert_bound)->default_value("0"))
-            ("range", "use range query and specify length", cxxopts::value<int>(length_range)->default_value("0"));
+            ("output", "output key list", cxxopts::value<string>(output)->default_value("key_list.txt"));
     auto result = commandline_options.parse(argc, argv);
     if (result.count("help")) {
         printf("%s", commandline_options.help().c_str());
@@ -139,8 +142,6 @@ int main(int argc, char *argv[]) {
 
     adgMod::fd_limit = unlimit_fd ? 1024 * 1024 : 1024;
     adgMod::restart_read = true;
-    adgMod::level_learning_enabled ^= change_level_learning;
-    adgMod::file_learning_enabled ^= change_file_learning;
     adgMod::load_level_model ^= change_level_load;
     adgMod::load_file_model ^= change_file_load;
 
@@ -161,7 +162,7 @@ int main(int argc, char *argv[]) {
         //adgMod::key_size = (int) keys.front().size();
     } else {
         std::uniform_int_distribution<uint64_t> udist_key(0, 999999999999999);
-        for (int i = 0; i < 10000000; ++i) {
+        for (int i = 0; i < 1000000; ++i) {
             keys.push_back(generate_key(to_string(udist_key(e2))));
         }
     }
@@ -193,18 +194,18 @@ int main(int argc, char *argv[]) {
     string values(1024 * 1024, '0');
 
     if (copy_out) {
-        system("sync; echo 3 | sudo tee /proc/sys/vm/drop_caches");
+        rc = system("sync; echo 3 | sudo tee /proc/sys/vm/drop_caches");
     }
 
     if (num_mix > 1000) {
         mix_base = 1000;
         num_mix -= 1000;
     }
-    
+
     for (size_t iteration = 0; iteration < num_iteration; ++iteration) {
-        if (copy_out) {
-            system("sudo fstrim -a -v");
-        }
+//        if (copy_out) {
+//            rc = system("sudo fstrim -a -v");
+//        }
 
         db_location = db_location_copy;
         std::uniform_int_distribution<uint64_t > uniform_dist_file(0, (uint64_t) keys.size() - 1);
@@ -226,17 +227,20 @@ int main(int argc, char *argv[]) {
 
 
         if (fresh_write && iteration == 0) {
+            // Load DB
+            // clear existing directory, clear page cache, trim SSD
             string command = "rm -rf " + db_location;
-            system(command.c_str());
-            system("sudo fstrim -a -v");
-            system("sync; echo 3 | sudo tee /proc/sys/vm/drop_caches");
-            cout << "delete and trim complete" << endl;
+            rc = system(command.c_str());
+//            rc = system("sudo fstrim -a -v");
+//            rc = system("sync; echo 3 | sudo tee /proc/sys/vm/drop_caches");
+//            cout << "delete and trim complete" << endl;
 
             status = DB::Open(options, db_location, &db);
             assert(status.ok() && "Open Error");
 
 
             instance->StartTimer(9);
+            // different load order
             int cut_size = keys.size() / 100000;
             std::vector<std::pair<int, int>> chunks;
             switch (load_type) {
@@ -269,6 +273,7 @@ int main(int argc, char *argv[]) {
                 default: assert(false && "Unsupported load type.");
             }
 
+            // perform load
             for (int cut = 0; cut < chunks.size(); ++cut) {
                 for (int i = chunks[cut].first; i < chunks[cut].second; ++i) {
 
@@ -284,19 +289,29 @@ int main(int argc, char *argv[]) {
             instance->PauseTimer(9, true);
             cout << "Put Complete" << endl;
 
+            ofstream fd;
+            fd.open(db_location + "/" + output);
+            for (int i = 0; i < keys.size(); ++i)
+                fd << keys[i] << "\n";
+            fd.close();
+
             keys.clear();
 
+            // reopen DB and do offline leraning
             if (print_file_info && iteration == 0) db->PrintFileInfo();
             adgMod::db->WaitForBackground();
             delete db;
             status = DB::Open(options, db_location, &db);
             adgMod::db->WaitForBackground();
-            if (adgMod::MOD == 6 || adgMod::MOD == 7) {
+            if (adgMod::MOD == 6 || adgMod::MOD == 7 || adgMod::MOD == 9) {
                 Version* current = adgMod::db->versions_->current();
 
+                // offline level learning
                 for (int i = 1; i < config::kNumLevels; ++i) {
-                    LearnedIndexData::Learn(new VersionAndSelf{current, adgMod::db->version_count, current->learned_index_data_[i].get(), i});
+                    LearnedIndexData::LevelLearn(new VersionAndSelf{current, adgMod::db->version_count, current->learned_index_data_[i].get(), i});
                 }
+
+                // offline file learning
                 current->FileLearn();
             }
             cout << "Shutting down" << endl;
@@ -314,50 +329,39 @@ int main(int argc, char *argv[]) {
                 adgMod::key_size = (int) keys.front().size();
             }
             fresh_write = false;
+            return 0;
         }
 
 
-
+        // for mix workloads, copy out the whole DB to preserve the original one
         if (copy_out) {
             string db_location_mix = db_location + "_mix";
             string remove_command = "rm -rf " + db_location_mix;
             string copy_command = "cp -r " + db_location + " " + db_location_mix;
 
-            system(remove_command.c_str());
-            system(copy_command.c_str());
+            rc = system(remove_command.c_str());
+            rc = system(copy_command.c_str());
             db_location = db_location_mix;
         }
 
 
 
 
-        if (evict) system("sync; echo 3 | sudo tee /proc/sys/vm/drop_caches");
+        if (evict) rc = system("sync; echo 3 | sudo tee /proc/sys/vm/drop_caches");
+        (void) rc;
 
         cout << "Starting up" << endl;
         status = DB::Open(options, db_location, &db);
         adgMod::db->WaitForBackground();
-        Iterator* db_iter = length_range == 0 ? nullptr : db->NewIterator(read_options);
         assert(status.ok() && "Open Error");
-//            for (int s = 12; s < 20; ++s) {
-//                instance->ResetTimer(s);
-//            }
 
-//        if (adgMod::MOD == 6 || adgMod::MOD == 7) {
-//            for (int i = 1; i < config::kNumLevels; ++i) {
-//                Version* current = adgMod::db->versions_->current();
-//                LearnedIndexData::Learn(new VersionAndSelf{current, adgMod::db->version_count, current->learned_index_data_[i].get(), i});
-//            }
-//        }
-//        cout << "Shutting down" << endl;
-//        adgMod::db->WaitForBackground();
-//        delete db;
-//        return 0;
 
         uint64_t last_read = 0, last_write = 0;
         int last_level = 0, last_file = 0, last_baseline = 0, last_succeeded = 0, last_false = 0, last_compaction = 0, last_learn = 0;
         std::vector<uint64_t> detailed_times;
         bool start_new_event = true;
 
+        // perform workloads according to given distribution, read-write percentage, YCSB workload. (If they are set.)
         instance->StartTimer(13);
         uint64_t write_i = 0;
         for (int i = 0; i < num_operations; ++i) {
@@ -367,11 +371,11 @@ int main(int argc, char *argv[]) {
                 start_new_event = false;
             }
 
-            bool write = use_ycsb ? ycsb_is_write[i] == 1 || ycsb_is_write[i] == 2 : (i % mix_base) < num_mix;
-            length_range = use_ycsb && ycsb_is_write[i] > 2 ? ycsb_is_write[i] - 100 : length_range;
-
+            bool write = use_ycsb ? ycsb_is_write[i] > 0 : (i % mix_base) < num_mix;
             if (write) {
+                // write
                 if (input_filename.empty()) {
+                    // used for ycsb default
                     instance->StartTimer(10);
                     status = db->Put(write_options, generate_key(to_string(distribution[i])), {values.data() + uniform_dist_value(e3), (uint64_t) adgMod::value_size});
                     instance->PauseTimer(10);
@@ -387,43 +391,21 @@ int main(int argc, char *argv[]) {
 
                     instance->StartTimer(10);
                     if (use_ycsb && ycsb_is_write[i] == 2) {
+                        // ycsb insert
                         status = db->Put(write_options, generate_key(to_string(10000000000 + index)), {values.data() + uniform_dist_value(e3), (uint64_t) adgMod::value_size});
                     } else {
+                        // other write
                         status = db->Put(write_options, keys[index], {values.data() + uniform_dist_value(e3), (uint64_t) adgMod::value_size});
                     }
                     instance->PauseTimer(10);
                     assert(status.ok() && "Mix Put Error");
                     //cout << index << endl;
                 }
-            } else if (length_range != 0) {
-                // Seek
-                if (input_filename.empty()) {
-                    instance->StartTimer(4);
-                    db_iter->Seek(generate_key(to_string(distribution[i])));
-                    instance->PauseTimer(4);
-                } else {
-                    uint64_t index = use_distribution ? distribution[i] : uniform_dist_file2(e2) % (keys.size() - 1);
-                    index = index >= length_range ? index - length_range : 0;
-                    const string& key = keys[index];
-                    instance->StartTimer(4);
-                    db_iter->Seek(key);
-                    instance->PauseTimer(4);
-                }
-                
-                // Range
-                instance->StartTimer(17);
-                for (int r = 0; r < length_range; ++r) {
-                    if (!db_iter->Valid()) break;
-                    Slice key = db_iter->key();
-                    string value = db_iter->value().ToString();
-                    // cout << key.ToString() << value << endl;
-                    // value.clear();
-                    db_iter->Next();
-                }
-                instance->PauseTimer(17);
             } else {
+                // read
                 string value;
                 if (input_filename.empty()) {
+                    // ycsb default
                     instance->StartTimer(4);
                     status = db->Get(read_options, generate_key(to_string(distribution[i])), &value);
                     instance->PauseTimer(4);
@@ -436,8 +418,10 @@ int main(int argc, char *argv[]) {
                     const string& key = keys[index];
                     instance->StartTimer(4);
                     if (insert_bound != 0 && index > insert_bound) {
+                        // read inserted key
                         status = db->Get(read_options, generate_key(to_string(10000000000 + index)), &value);
                     } else {
+                        // other
                         status = db->Get(read_options, key, &value);
                     }
                     instance->PauseTimer(4);
@@ -450,10 +434,19 @@ int main(int argc, char *argv[]) {
                 }
             }
 
+#ifdef RECORD_LEVEL_INFO
+//            if (i < 1100) {
+//                if (write) num_write += 1;
+//                else num_read += 1;
+//            }
+#endif
+
+
             if (pause) {
                 if ((i + 1) % (num_operations / 10000) == 0) ::usleep(800000);
             }
 
+            // collect data every 1/10 of the run
             if ((i + 1) % (num_operations / 100) == 0) detailed_times.push_back(instance->GetTime());
             if ((i + 1) % (num_operations / 10) == 0) {
                 int level_read = levelled_counters[0].Sum();
@@ -488,7 +481,7 @@ int main(int argc, char *argv[]) {
                 last_write = write_time;
                 detailed_times.clear();
                 start_new_event = true;
-                cout << (i + 1) / (num_operations / 10) << endl;
+                cout << "Progress:" << (i + 1) / (num_operations / 10) * 10 << "%" << endl;
                 Version* current = adgMod::db->versions_->current();
                 printf("LevelSize %d %d %d %d %d %d\n", current->NumFiles(0), current->NumFiles(1), current->NumFiles(2), current->NumFiles(3),
                        current->NumFiles(4), current->NumFiles(5));
@@ -498,7 +491,7 @@ int main(int argc, char *argv[]) {
         instance->PauseTimer(13, true);
 
 
-
+        // report various data after the run
         instance->ReportTime();
         for (int s = 0; s < times.size(); ++s) {
             times[s].push_back(instance->ReportTime(s));
@@ -515,6 +508,11 @@ int main(int argc, char *argv[]) {
         for (Counter& c : levelled_counters) c.Report();
 
         file_data->Report();
+        Version* current = adgMod::db->versions_->current();
+        cout << "Level model stats:" << endl;
+        for (int i = 1; i < config::kNumLevels; ++i) {
+            current->learned_index_data_[i]->ReportStats();
+        }
 
         for (auto it : file_stats) {
             printf("FileStats %d %d %lu %lu %u %u %lu %d\n", it.first, it.second.level, it.second.start,
@@ -523,10 +521,11 @@ int main(int argc, char *argv[]) {
 
         adgMod::learn_cb_model->Report();
 
-        delete db_iter;
+
         delete db;
     }
 
+    // print out averages
 
     for (int s = 0; s < times.size(); ++s) {
         vector<uint64_t>& time = times[s];

@@ -25,6 +25,8 @@ namespace adgMod {
 
     class LearnedIndexData;
 
+    // An array collecting the total number of keys in a level in or before each file. One per level.
+    // Used to get the target file when a level model produces the predicted position in the level. 
     class AccumulatedNumEntriesArray {
         friend class LearnedIndexData;
 
@@ -32,8 +34,11 @@ namespace adgMod {
         std::vector<std::pair<uint64_t, string>> array;
     public:
         AccumulatedNumEntriesArray() = default;
+        // During learning, add info to this array with the number of entries in a file and its largest key
         void Add(uint64_t num_entries, string&& key);
+        // Given a predicted interval, return the target file index in param:index.
         bool Search(const Slice& key, uint64_t lower, uint64_t upper, size_t* index, uint64_t* relative_lower, uint64_t* relative_upper);
+        // Used for testing assuming the model has no error
         bool SearchNoError(uint64_t position, size_t* index, uint64_t* relative_position);
         uint64_t NumEntries() const;
     };
@@ -55,21 +60,29 @@ namespace adgMod {
         LearnedIndexData* self;
         int level;
     };
+
+    // The structure for learned index. Could be a file model or a level model
     class LearnedIndexData {
         friend class leveldb::Version;
         friend class leveldb::VersionSet;
     private:
+        // predefined model error
         double error;
+        // some flags used in online learning to control the state of the model
         std::atomic<bool> learned;
         std::atomic<bool> aborted;
         bool learned_not_atomic;
         std::atomic<bool> learning;
+        // some params for level triggering policy, deprecated
         int allowed_seek;
         int current_seek;
     public:
+        // is the data of this model filled (ready for learning)
         bool filled;
+        // is this a level model
         bool is_level;
 
+        // Learned linear segments and some other data needed
         std::vector<Segment> string_segments;
         uint64_t min_key;
         uint64_t max_key;
@@ -78,7 +91,9 @@ namespace adgMod {
 
 
     public:
+        // all keys in the file/level to be leraned from
         std::vector<std::string> string_keys;
+        // only used in level models
         AccumulatedNumEntriesArray num_entries_accumulated;
 
         int level;
@@ -96,26 +111,43 @@ namespace adgMod {
 
 
 
-        explicit LearnedIndexData(int allowed_seek) : error(adgMod::model_error), learned(false), aborted(false), learning(false),
-            learned_not_atomic(false), allowed_seek(allowed_seek), current_seek(0), filled(false), is_level(false), level(0), served(0), cost(0) {};
+        explicit LearnedIndexData(int allowed_seek, bool level_model) : error(level_model?level_model_error:file_model_error), learned(false), aborted(false), learning(false),
+            learned_not_atomic(false), allowed_seek(allowed_seek), current_seek(0), filled(false), is_level(level_model), level(0), served(0), cost(0) {};
         LearnedIndexData(const LearnedIndexData& other) = delete;
+
+        // Inference function. Return the predicted interval.
+        // If the key is in the training set, the output interval guarantees to include the key
+        // otherwise, the output is undefined!
+        // If the output lower bound is larger than MaxPosition(), the target key is not in the file
         std::pair<uint64_t, uint64_t> GetPosition(const Slice& key) const;
         uint64_t MaxPosition() const;
         double GetError() const;
+        
+        // Learning function and checker (check if this model is available)
         bool Learn();
         bool Learned();
         bool Learned(Version* version, int v_count, int level);
         bool Learned(Version* version, int v_count, FileMetaData* meta, int level);
-        static void Learn(void* arg);
+        static void LevelLearn(void* arg, bool no_lock=false);
         static uint64_t FileLearn(void* arg);
+
+        // Load all the keys in the file/level
         bool FillData(Version* version, FileMetaData* meta);
+
+        // writing this model to disk and load this model from disk
         void WriteModel(const string& filename);
         void ReadModel(const string& filename);
+        
+        // print model stats
         void ReportStats();
+
+        // test functions when developing CBA...
         void FillCBAStat(bool positive, bool model, uint64_t time);
+
+        bool Learn(bool file);
     };
 
-
+    // an array storing all file models and provide similar access interface with multithread protection
     class FileLearnedIndexData {
     private:
         leveldb::port::Mutex mutex;
@@ -133,6 +165,15 @@ namespace adgMod {
         void Report();
         ~FileLearnedIndexData();
     };
+
+    class LevelLearnedIndexData {
+     private:
+      leveldb::port::Mutex mutex;
+      std::vector<LearnedIndexData*> level_learned_index_data;
+     public:
+
+    };
+
 
 }
 

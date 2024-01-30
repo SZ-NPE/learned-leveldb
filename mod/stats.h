@@ -1,6 +1,9 @@
 //
 // Created by daiyi on 2019/09/30.
-//
+// A Singleton that contains timers to be easily used globally
+// Though other globally used structures are directly set to be global variables instead...
+// Usage: first param is the clock id to operate, second param is optional: 
+// a flag if this time interval is recorded. 
 
 #ifndef LEVELDB_STATS_H
 #define LEVELDB_STATS_H

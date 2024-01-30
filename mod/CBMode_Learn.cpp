@@ -25,6 +25,7 @@ void CBModel_Learn::AddLearnCost(int level, uint64_t cost, uint64_t size) {
 }
 
 double CBModel_Learn::CalculateCB(int level, uint64_t file_size) {
+    // used for simple testing different learning policies, not used now
     if (adgMod::policy == 2) return 0;
 
     int num_pos[2] = {0, 0}, num_neg[2] = {0, 0}, num_files = 0, num_learn = 0;
@@ -90,6 +91,7 @@ double CBModel_Learn::CalculateCB(int level, uint64_t file_size) {
 //    //std::cout << model->gain_p << std::endl;
 //    model->num_files_p = num_files;
 
+    // used for simple testing different learning policies, not used now
     if (adgMod::policy == 1) return const_size_to_cost + 1;
     if (adgMod::policy == 2) return 0;
 

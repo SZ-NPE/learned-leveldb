@@ -1,6 +1,6 @@
 //
 // Created by daiyi on 2020/02/02.
-//
+// Internal implementation for timers used in Stats class.
 
 #ifndef LEVELDB_TIMER_H
 #define LEVELDB_TIMER_H

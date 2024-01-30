@@ -1,6 +1,6 @@
 //
 // Created by daiyi on 2020/02/12.
-//
+// Levelled counter that can record some integers for each level
 
 #ifndef PROJECT1_COUNTER_H
 #define PROJECT1_COUNTER_H

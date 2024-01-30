@@ -114,12 +114,19 @@ class Version {
   // Return a human readable string that describes this version's contents.
   std::string DebugString() const;
 
+  // print level summary
   void PrintAll() const;
+  // Fill file model data
   bool FillData(const ReadOptions& options, FileMetaData* meta, adgMod::LearnedIndexData* data);
+  // Fill level model data, essentially fill every file model data in that level and copy
+  // them as a whole
   bool FillLevel(const ReadOptions& options, int level);
+  // Write and read file&level models (the name is misguiding LOL)
   void WriteLevelModel();
   void ReadLevelModel();
+  // Offline file learning will call this to learn all files
   void FileLearn();
+  // When a DB is loaded, the stats of all files is dumped by this function to be used in CBA
   void ReadFileStats();
 
  private:
@@ -139,7 +146,7 @@ class Version {
         compaction_score_(-1),
         compaction_level_(-1) {
             for (int i = 0; i < config::kNumLevels; ++i)
-                learned_index_data_.push_back(std::make_shared<adgMod::LearnedIndexData>(adgMod::level_allowed_seek));
+                learned_index_data_.push_back(std::make_shared<adgMod::LearnedIndexData>(adgMod::level_allowed_seek, true));
         }
 
   Version(const Version&) = delete;
