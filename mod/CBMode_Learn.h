@@ -1,3 +1,5 @@
+// CBA
+
 #ifndef LEVELDB_CBMODE_LEARN_H
 #define LEVELDB_CBMODE_LEARN_H
 
@@ -35,10 +37,14 @@ public:
     static const int lookup_average_limit = 10000;
 
     CBModel_Learn();
+    // functions that record data during runtime
     void AddLookupData(int level, bool positive, bool model, uint64_t value);
     void AddFileData(int level, uint64_t num_negative, uint64_t num_positive, uint64_t size);
     void AddLearnCost(int level, uint64_t cost, uint64_t size);
+    
+    // check if a model is benefitial to learn
     double CalculateCB(int level, uint64_t file_size);
+    // report collected stats
     void Report();
 };
 

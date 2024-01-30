@@ -61,32 +61,40 @@ GreedyPLR::GreedyPLR(double gamma) {
 int counter = 0;
 
 Segment
-GreedyPLR::process(const struct point& pt) {
-    this->last_pt = pt;
+GreedyPLR::process(const struct point& pt, bool file) {
+    Segment s = {0, 0, 0};
     if (this->state.compare("need2") == 0) {
         this->s0 = pt;
         this->state = "need1";
     } else if (this->state.compare("need1") == 0) {
         this->s1 = pt;
-        setup();
-        this->state = "ready";
+        if (setup()) {
+            this->state = "ready";
+        }
     } else if (this->state.compare("ready") == 0) {
-        return process__(pt);
+        s = process__(pt, file);
     } else {
         // impossible
         std::cout << "ERROR in process" << std::endl;
     }
-    Segment s = {0, 0, 0, 0};
+    this->last_pt = pt;
     return s;
 }
 
-void
+bool
 GreedyPLR::setup() {
     this->rho_lower = get_line(get_upper_bound(this->s0, this->gamma),
                                get_lower_bound(this->s1, this->gamma));
+    if (!this->rho_lower.LineCheck()) {
+        return false;
+    }
     this->rho_upper = get_line(get_lower_bound(this->s0, this->gamma),
                                get_upper_bound(this->s1, this->gamma));
+    if (!this->rho_upper.LineCheck()) {
+        return false;
+    }
     this->sint = get_intersetction(this->rho_upper, this->rho_lower);
+    return true;
 }
 
 Segment
@@ -94,16 +102,26 @@ GreedyPLR::current_segment() {
     uint64_t segment_start = this->s0.x;
     double avg_slope = (this->rho_lower.a + this->rho_upper.a) / 2.0;
     double intercept = -avg_slope * this->sint.x + this->sint.y;
-    Segment s = {segment_start, avg_slope, intercept, last_pt.x};
+    Segment s = {segment_start, avg_slope, intercept};
     return s;
 }
 
 Segment
-GreedyPLR::process__(struct point pt) {
+GreedyPLR::process__(struct point pt, bool file) {
     if (!(is_above(pt, this->rho_lower) && is_below(pt, this->rho_upper))) {
+      // new point out of error bounds
         Segment prev_segment = current_segment();
-        this->s0 = pt;
-        this->state = "need1";
+        if (!file && (u_int32_t) pt.y % 2 == 1) {
+          // current point is the largest point in the segments
+            this->s0 = last_pt;
+            this->s1 = pt;
+            setup();
+            this->state = "ready";
+            return prev_segment;
+        } else {
+            this->s0 = pt;
+            this->state = "need1";
+        }
         return prev_segment;
     }
 
@@ -115,13 +133,13 @@ GreedyPLR::process__(struct point pt) {
     if (is_above(s_lower, this->rho_lower)) {
         this->rho_lower = get_line(this->sint, s_lower);
     }
-    Segment s = {0, 0, 0, 0};
+    Segment s = {0, 0, 0};
     return s;
 }
 
 Segment
 GreedyPLR::finish() {
-    Segment s = {0, 0, 0, 0};
+    Segment s = {0, 0, 0};
     if (this->state.compare("need2") == 0) {
         this->state = "finished";
         return s;
@@ -130,7 +148,6 @@ GreedyPLR::finish() {
         s.x = this->s0.x;
         s.k = 0;
         s.b = this->s0.y;
-        s.x2 = this->last_pt.x;
         return s;
     } else if (this->state.compare("ready") == 0) {
         this->state = "finished";
@@ -151,7 +168,7 @@ PLR::train(std::vector<string>& keys, bool file) {
     int count = 0;
     size_t size = keys.size();
     for (int i = 0; i < size; ++i) {
-        Segment seg = plr.process(point((double) stoull(keys[i]), i));
+        Segment seg = plr.process(point((double) stoull(keys[i]), i), file);
         if (seg.x != 0 ||
             seg.k != 0 ||
             seg.b != 0) {

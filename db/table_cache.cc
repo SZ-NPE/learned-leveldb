@@ -129,7 +129,7 @@ Status TableCache::FindTable(uint64_t file_number, uint64_t file_size,
 
 Iterator* TableCache::NewIterator(const ReadOptions& options,
                                   uint64_t file_number, uint64_t file_size,
-                                  Table** tableptr, bool range) {
+                                  Table** tableptr) {
   if (tableptr != nullptr) {
     *tableptr = nullptr;
   }
@@ -140,15 +140,8 @@ Iterator* TableCache::NewIterator(const ReadOptions& options,
     return NewErrorIterator(s);
   }
 
-  TableAndFile* tf = reinterpret_cast<TableAndFile*>(cache_->Value(handle));
-  Table* table = tf->table;
-  Iterator* result = nullptr;
-  if (range) {
-    result = table->NewIterator(options, file_number, tf->file);
-  } else {
-    result = table->NewIterator(options);
-  }
-  
+  Table* table = reinterpret_cast<TableAndFile*>(cache_->Value(handle))->table;
+  Iterator* result = table->NewIterator(options);
   result->RegisterCleanup(&UnrefEntry, cache_, handle);
   if (tableptr != nullptr) {
     *tableptr = table;
@@ -164,15 +157,20 @@ Status TableCache::Get(const ReadOptions& options, uint64_t file_number,
   Cache::Handle* handle = nullptr;
   adgMod::Stats* instance = adgMod::Stats::GetInstance();
 
-  if ((adgMod::MOD == 6 || adgMod::MOD == 7)) {
+  if ((adgMod::MOD == 6 || adgMod::MOD == 7 || adgMod::MOD == 9)) {
+      // check if file model is ready
       *model = adgMod::file_data->GetModel(meta->number);
       assert(file_learned != nullptr);
       *file_learned = (*model)->Learned();
+
+      // if level model is used or file model is available, go Bourbon path
       if (learned || *file_learned) {
           LevelRead(options, file_number, file_size, k, arg, handle_result, level, meta, lower, upper, learned, version);
           return Status::OK();
       }
   }
+
+  // else, go baseline path
 
 #ifdef INTERNAL_TIMER
   instance->StartTimer(1);
@@ -307,42 +305,47 @@ void TableCache::LevelRead(const ReadOptions &options, uint64_t file_number,
 
 
     if (!learned) {
+      // if level model is not used, consult file model for predicted position
 #ifdef INTERNAL_TIMER
-        instance->StartTimer(2);
+      instance->StartTimer(2);
 #endif
-        ParsedInternalKey parsed_key;
-        ParseInternalKey(k, &parsed_key);
-        adgMod::LearnedIndexData* model = adgMod::file_data->GetModel(meta->number);
-        auto bounds = model->GetPosition(parsed_key.user_key);
-        lower = bounds.first;
-        upper = bounds.second;
+      ParsedInternalKey parsed_key;
+      ParseInternalKey(k, &parsed_key);
+      adgMod::LearnedIndexData* model = adgMod::file_data->GetModel(meta->number);
+      auto bounds = model->GetPosition(parsed_key.user_key);
+      lower = bounds.first;
+      upper = bounds.second;
 #ifdef INTERNAL_TIMER
-        instance->PauseTimer(2);
+      instance->PauseTimer(2);
 #endif
-        if (lower > model->MaxPosition()) return;
+      if (lower > model->MaxPosition()) return;
 #ifdef RECORD_LEVEL_INFO
         adgMod::levelled_counters[1].Increment(level);
-    } else {
+      } else {
         adgMod::levelled_counters[0].Increment(level);
 #endif
     }
 
 
     // Get the position we want to read
+    // Get the data block index
     size_t index_lower = lower / adgMod::block_num_entries;
     size_t index_upper = upper / adgMod::block_num_entries;
 
+    // if the given interval overlaps two data block, consult the index block to get
+    // the largest key in the first data block and compare it with the target key
+    // to decide which data block the key is in
     uint64_t i = index_lower;
     if (index_lower != index_upper) {
-        Block* index_block = tf->table->rep_->index_block;
-        uint32_t mid_index_entry = DecodeFixed32(index_block->data_ + index_block->restart_offset_ + index_lower * sizeof(uint32_t));
-        uint32_t shared, non_shared, value_length;
-        const char* key_ptr = DecodeEntry(index_block->data_ + mid_index_entry,
-                                          index_block->data_ + index_block->restart_offset_, &shared, &non_shared, &value_length);
-        assert(key_ptr != nullptr && shared == 0 && "Index Entry Corruption");
-        Slice mid_key(key_ptr, non_shared);
-        int comp = tf->table->rep_->options.comparator->Compare(mid_key, k);
-        i = comp < 0 ? index_upper : index_lower;
+      Block* index_block = tf->table->rep_->index_block;
+      uint32_t mid_index_entry = DecodeFixed32(index_block->data_ + index_block->restart_offset_ + index_lower * sizeof(uint32_t));
+      uint32_t shared, non_shared, value_length;
+      const char* key_ptr = DecodeEntry(index_block->data_ + mid_index_entry,
+                                        index_block->data_ + index_block->restart_offset_, &shared, &non_shared, &value_length);
+      assert(key_ptr != nullptr && shared == 0 && "Index Entry Corruption");
+      Slice mid_key(key_ptr, non_shared);
+      int comp = tf->table->rep_->options.comparator->Compare(mid_key, k);
+      i = comp < 0 ? index_upper : index_lower;
     }
 
 
@@ -353,11 +356,11 @@ void TableCache::LevelRead(const ReadOptions &options, uint64_t file_number,
 #endif
     if (filter != nullptr && !filter->KeyMayMatch(block_offset, k)) {
 #ifdef INTERNAL_TIMER
-        auto time = instance->PauseTimer(15, true);
-        adgMod::levelled_counters[9].Increment(level, time.second - time.first);
+      auto time = instance->PauseTimer(15, true);
+      adgMod::levelled_counters[9].Increment(level, time.second - time.first);
 #endif
-        cache_->Release(cache_handle);
-        return;
+      cache_->Release(cache_handle);
+      return;
     }
 #ifdef INTERNAL_TIMER
     auto time = instance->PauseTimer(15, true);
@@ -365,6 +368,7 @@ void TableCache::LevelRead(const ReadOptions &options, uint64_t file_number,
     instance->StartTimer(5);
 #endif
 
+    // Get the interval within the data block that the target key may lie in
     size_t pos_block_lower = i == index_lower ? lower % adgMod::block_num_entries : 0;
     size_t pos_block_upper = i == index_upper ? upper % adgMod::block_num_entries : adgMod::block_num_entries - 1;
 
@@ -380,43 +384,43 @@ void TableCache::LevelRead(const ReadOptions &options, uint64_t file_number,
 #endif
 
 
-    // Binary Search
+    // Binary Search within the interval
     uint64_t left = pos_block_lower, right = pos_block_upper;
     while (left < right) {
-        uint32_t mid = (left + right) / 2;
-        uint32_t shared, non_shared, value_length;
-        const char* key_ptr = DecodeEntry(entries.data() + (mid - pos_block_lower) * adgMod::entry_size,
-                entries.data() + read_size, &shared, &non_shared, &value_length);
-        assert(key_ptr != nullptr && shared == 0 && "Entry Corruption");
+      uint32_t mid = (left + right) / 2;
+      uint32_t shared, non_shared, value_length;
+      const char* key_ptr = DecodeEntry(entries.data() + (mid - pos_block_lower) * adgMod::entry_size,
+              entries.data() + read_size, &shared, &non_shared, &value_length);
+      assert(key_ptr != nullptr && shared == 0 && "Entry Corruption");
 
 #ifdef INTERNAL_TIMER
-        if (first_search) {
-            first_search = false;
-            instance->PauseTimer(5);
-            instance->StartTimer(3);
-        }
+      if (first_search) {
+        first_search = false;
+        instance->PauseTimer(5);
+        instance->StartTimer(3);
+      }
 #endif
 
-        Slice mid_key(key_ptr, non_shared);
-        int comp = tf->table->rep_->options.comparator->Compare(mid_key, k);
-        if (comp < 0) {
-            left = mid + 1;
-        } else {
-            right = mid;
-        }
+      Slice mid_key(key_ptr, non_shared);
+      int comp = tf->table->rep_->options.comparator->Compare(mid_key, k);
+      if (comp < 0) {
+        left = mid + 1;
+      } else {
+        right = mid;
+      }
     }
 
 
-
+    // decode the target entry to get the key and value (actually value_addr)
     uint32_t shared, non_shared, value_length;
     const char* key_ptr = DecodeEntry(entries.data() + (left - pos_block_lower) * adgMod::entry_size,
             entries.data() + read_size, &shared, &non_shared, &value_length);
     assert(key_ptr != nullptr && shared == 0 && "Entry Corruption");
 #ifdef INTERNAL_TIMER
     if (!first_search) {
-        instance->PauseTimer(3);
+      instance->PauseTimer(3);
     } else {
-        instance->PauseTimer(5);
+      instance->PauseTimer(5);
     }
 #endif
     Slice key(key_ptr, non_shared), value(key_ptr + non_shared, value_length);

@@ -14,7 +14,8 @@ namespace adgMod {
     int MOD = 5;
     bool string_mode = true;
     uint64_t key_multiple = 1;
-    uint32_t model_error = 10;
+    uint32_t file_model_error = 10;
+    uint32_t level_model_error = 1;
     int block_restart_interval = 16;
     uint32_t test_num_level_segments = 100;
     uint32_t test_num_file_segments = 100;
@@ -26,12 +27,15 @@ namespace adgMod {
     leveldb::WriteOptions write_options;
     FileLearnedIndexData* file_data = nullptr;
     CBModel_Learn* learn_cb_model = nullptr;
-    uint64_t fd_limit;
+    uint64_t fd_limit = 1024 * 1024;
     bool use_filter = false;
     bool restart_read = false;
     bool fresh_write = false;
     bool reopen = false;
-    uint64_t learn_trigger_time = 500000;
+
+    // the time we wait before learning (as the file may die within this short time and
+    // if we learn, we waste the learning)
+    uint64_t learn_trigger_time = 50000000;
     int policy = 0;
     std::atomic<int> num_read(0);
     std::atomic<int> num_write(0);
@@ -49,7 +53,7 @@ namespace adgMod {
     uint64_t entry_size = 0;
 
 
-    vector<Counter> levelled_counters(12);
+    vector<Counter> levelled_counters(15);
     vector<vector<Event*>> events(3);
     leveldb::port::Mutex compaction_counter_mutex;
     leveldb::port::Mutex learn_counter_mutex;
